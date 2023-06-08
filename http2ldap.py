@@ -1,9 +1,11 @@
 #!/bin/env python3
-DEFAULT_HTTP_INTERFACE = ''
-DEFAULT_HTTP_PORT = 80
 
+import json
 import sys
-from http import server # Python 3
+from http import server
+from urllib.parse import urlparse # Python 3
+from get_args import get_args
+from ldap_query import check_form
 
 def item_default(o,i=0, default=None):
     try:
@@ -17,54 +19,47 @@ def int_default(s, default=None):
     except:
     	return default
 
-def parseUrl(url = '', default_host=DEFAULT_HTTP_INTERFACE, default_port=DEFAULT_HTTP_PORT):
-    try:
-      pasedUrl = url.split(':',1)
-      host = item_default(pasedUrl, 0) or default_host
-      port = int_default(item_default(pasedUrl, 1)) or default_port
-      return (host, port)
-    except:
-      return (default_host, default_port)
-  
-
 class ThisHTTPRequestHandler(server.SimpleHTTPRequestHandler):
 
     def _return(self, status, content = '', headers = {}):
         bytes = content.encode()
         self.send_response(status)
         for k,v in headers.items():
-        	self.send_header(k,v)
+            self.send_header(k,v)
         self.send_header('Content-Length',len(bytes))
         self.end_headers()
         self.wfile.write(bytes)
 
-    def do_GET(self):
+    def _request(self, query_string):
         try:
-            key = self.headers[HEADER_KEY]
-            value = "TODO"
-            if value == None:
-                return self._return(404)
-            return self._return(200,headers={HEADER_VALUE:value})
-        except:
-            return self._return(500)
+            result = check_form(query_string, args.ldap_server, args.ldap_user, args.ldap_password, args.search_base, args.search_filter, args.attributes)
+            entries = result.get("entries")
+            if not entries or len(entries) != 1:
+                return self._return(400, result.get("error","an empty record or more than one record was returned")+"\r\n")
+            attributes = dict({"dn": entries[0]["dn"]})
+            attributes.update({k:",".join(v) if type(v) is list else f"{v}" for k,v in entries[0]["attributes"].items()})
+            return self._return(200, "OK\r\n", attributes)
+        except Exception as err:
+            return self._return(500, f"{err}\r\n")
+
+    def do_GET(self):
+        query_string = urlparse(self.path).query
+        return self._request(query_string)
 
     def do_POST(self):
-        try:
-            key = self.headers[HEADER_KEY]
-            value = self.headers[HEADER_VALUE] or DEFAULT_VALUE
-            time = int_default(self.headers[HEADER_TIME]) or DEFAULT_TIME
-            if not key:
-                return self._return(400)
-            return self._return(200)
-        except:
-            return self._return(500)
+        query_string = urlparse(self.path).query
+        query_body = self.rfile.read(int(self.headers['Content-Length'])).decode()
+        return self._request(query_string + ('&' if query_string and query_body else '') + query_body)
 
 if __name__ == '__main__':
-    if '--help' == item_default(sys.argv,1):
-        print(f'Use: {sys.argv[0]} [<http_interface>:<http_port>]')
-        print(f'Default arguments: {DEFAULT_HTTP_INTERFACE}:{DEFAULT_HTTP_PORT}')
-        sys.exit()
-
-    thisServerUrl=item_default(sys.argv,1,f'{DEFAULT_HTTP_INTERFACE}:{DEFAULT_HTTP_PORT}')
-    httpd = server.HTTPServer(parseUrl(thisServerUrl), ThisHTTPRequestHandler)
-    httpd.serve_forever()
+    args = get_args()
+    print( args )
+    if args.test_query_string:
+        print( check_form(args.test_query_string, args.ldap_server, args.ldap_user, args.ldap_password, args.search_base, args.search_filter, args.attributes) )
+    else:
+        try:
+            httpd = server.HTTPServer((args.http_interface, args.http_port), ThisHTTPRequestHandler)
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            httpd.server_close()
+            print("\nServer stopped.")
