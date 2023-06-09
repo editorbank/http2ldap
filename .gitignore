@@ -1,0 +1,7 @@
+*.bak
+*.onefile-build/
+*.dist/
+*.build/
+*.bin
+venv/
+__pycache__/
